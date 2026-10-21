@@ -2,7 +2,7 @@
 
 A web application that helps students and staff report lost belongings, list found items, and return them to their rightful owners.
 
-> Project status: Planning. This document describes the proposed features and workflow.
+> Original planning document. The implementation is now available in this repository. See [README.md](README.md) for current setup instructions, features, verification status, and AWS deployment steps.
 
 ## Objective
 

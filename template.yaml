@@ -1,0 +1,163 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Campus Find authenticated lost and found portal
+Parameters:
+  CampusDomain:
+    Type: String
+    Default: campus.edu
+    AllowedPattern: "[a-zA-Z0-9.-]+"
+  FrontendOrigin:
+    Type: String
+    Default: http://localhost:5173
+Resources:
+  Records:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: pk, AttributeType: S }
+        - { AttributeName: sk, AttributeType: S }
+        - { AttributeName: gpk, AttributeType: S }
+        - { AttributeName: gsk, AttributeType: S }
+        - { AttributeName: opk, AttributeType: S }
+        - { AttributeName: osk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: pk, KeyType: HASH }
+        - { AttributeName: sk, KeyType: RANGE }
+      GlobalSecondaryIndexes:
+        - IndexName: ByKind
+          KeySchema:
+            - { AttributeName: gpk, KeyType: HASH }
+            - { AttributeName: gsk, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+        - IndexName: ByOwner
+          KeySchema:
+            - { AttributeName: opk, KeyType: HASH }
+            - { AttributeName: osk, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+      SSESpecification: { SSEEnabled: true }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+  Photos:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins: [!Ref FrontendOrigin]
+            AllowedMethods: [GET, POST]
+            AllowedHeaders: ["*"]
+            MaxAge: 300
+  SignupGuard:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: nodejs24.x
+      Handler: preSignup.handler
+      CodeUri: backend/
+      Environment:
+        Variables:
+          CAMPUS_DOMAIN: !Ref CampusDomain
+      Policies: [AWSLambdaBasicExecutionRole]
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        EntryPoints: [preSignup.ts]
+        Target: es2022
+        Minify: true
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      UsernameConfiguration: { CaseSensitive: false }
+      Schema:
+        - { Name: email, Required: true, Mutable: true }
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+      LambdaConfig:
+        PreSignUp: !GetAtt SignupGuard.Arn
+  SignupPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref SignupGuard
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt UserPool.Arn
+  AppClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      ExplicitAuthFlows: [ALLOW_USER_SRP_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+      PreventUserExistenceErrors: ENABLED
+      ReadAttributes: [email, email_verified]
+      WriteAttributes: [email]
+  Administrators:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: Administrators
+      UserPoolId: !Ref UserPool
+  Api:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins: [!Ref FrontendOrigin]
+        AllowMethods: [GET, POST, OPTIONS]
+        AllowHeaders: [Authorization, Content-Type]
+      Auth:
+        DefaultAuthorizer: CampusJwt
+        Authorizers:
+          CampusJwt:
+            IdentitySource: "$request.header.Authorization"
+            JwtConfiguration:
+              issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}"
+              audience: [!Ref AppClient]
+  Backend:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: nodejs24.x
+      Handler: handler.handler
+      CodeUri: backend/
+      Timeout: 20
+      MemorySize: 256
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Records
+          BUCKET_NAME: !Ref Photos
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref Records }
+        - S3CrudPolicy: { BucketName: !Ref Photos }
+      Events:
+        Root:
+          {
+            Type: HttpApi,
+            Properties: { ApiId: !Ref Api, Path: "/", Method: ANY },
+          }
+        Routes:
+          {
+            Type: HttpApi,
+            Properties: { ApiId: !Ref Api, Path: "/{proxy+}", Method: ANY },
+          }
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        EntryPoints: [handler.ts]
+        Target: es2022
+        Minify: true
+Outputs:
+  ApiUrl:
+    Value: !Sub "https://${Api}.execute-api.${AWS::Region}.${AWS::URLSuffix}"
+  UserPoolId: { Value: !Ref UserPool }
+  UserPoolClientId: { Value: !Ref AppClient }
+  PhotoBucket: { Value: !Ref Photos }
