@@ -13,12 +13,18 @@ npm ci
 ./scripts/deploy-cloud.ps1 -CampusDomain licet.ac.in -StackName campus-find -Region ap-south-1
 ```
 
-The script runs the tests, validates and builds the SAM template, deploys the stack, reads the actual stack outputs, builds the AWS frontend, and uploads the build to the stack's Amplify app. It starts an Amplify deployment and prints the command to check its terminal status. The deployment creates billable AWS resources.
+The script runs the tests, validates and builds the SAM template, deploys the stack, reads the actual stack outputs, builds the AWS frontend, and uploads the build to the stack's Amplify app. It waits for Amplify to finish, then verifies that the HTML and every referenced JavaScript/CSS asset return HTTP 200 with the correct content type. The deployment creates billable AWS resources.
 
 The stack manages the Amplify app and `main` hosting branch. This uses Amplify's manual ZIP deployment API and does not require a GitHub personal access token. GitHub pushes run the included automated checks; they do not automatically redeploy the hosted app. To update only the frontend:
 
 ```powershell
 ./scripts/publish-frontend.ps1 -StackName campus-find -Region ap-south-1
+```
+
+The packaging helper explicitly writes forward slashes in ZIP entry names on Windows. Do not replace it with Windows PowerShell's `Compress-Archive`: backslash entries can be deployed as literal object names, leaving the root HTML accessible while its scripts/styles return 404 and the page stays blank. To recheck the hosted assets at any time:
+
+```powershell
+node scripts/verify-hosting.mjs https://main.d36jvrvas9xfi5.amplifyapp.com
 ```
 
 To update backend code or infrastructure, rerun `deploy-cloud.ps1` with the same stack name and domain. Keep the existing stack name to preserve its data and identity resources.

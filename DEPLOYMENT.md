@@ -19,7 +19,7 @@ The API requires a Cognito access token; opening its reports endpoint without si
 - Seven automated tests pass, including authorization, private access, exact administrator-group membership, invalid requests, CORS preflight handling, claim conflicts, status transitions, signup domain restrictions, and cloud configuration validation.
 - TypeScript, demo build, and AWS-mode production build pass.
 - SAM lint validation and Lambda builds pass. CloudFormation stack status is `UPDATE_COMPLETE`.
-- Amplify deployment job 3 reached `SUCCEED`, and the hosted document returned HTTP 200.
+- Amplify deployment job 4 reached `SUCCEED`. The hosted HTML and every referenced JavaScript/CSS asset returned HTTP 200 with the correct MIME type.
 - Live API/browser-origin preflight responds without requiring a login token, while data routes remain protected.
 - Temporary users authenticated with real Cognito SRP sign-in. A temporary administrator was created only for the integration test.
 - A real photo was uploaded to private S3, viewed using a short-lived signed URL, and denied when requested without its signature.
@@ -28,6 +28,8 @@ The API requires a Cognito access token; opening its reports endpoint without si
 - Temporary test accounts, reports, claims, and photo were removed after the test.
 
 ## Remaining account setup and verification
+
+A Windows ZIP-path issue initially caused a blank page even though Amplify reported success. The packaging helper now writes portable forward-slash entry names, and every frontend publication checks the deployed scripts and styles before reporting success.
 
 Register and verify your real `@licet.ac.in` email on the portal. An authorized AWS operator can then add the intended administrator to the `Administrators` Cognito group; sign out and back in afterward. No real account was created with an invented password or automatically granted administration.
 

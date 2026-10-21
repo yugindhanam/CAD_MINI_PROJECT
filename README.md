@@ -9,6 +9,7 @@ The cloud application is deployed in AWS Mumbai (`ap-south-1`): **[Open Campus F
 - Verified: TypeScript checks, demo and cloud production builds, seven automated tests, SAM template validation/build, CloudFormation deployment, and successful Amplify publication.
 - The tests cover ownership restrictions, private claim access, administrator authorization, competing approval transactions using a mocked DynamoDB client, status transitions, and campus email domain validation.
 - Verified against real AWS: Cognito SRP authentication, private S3 upload/view, ownership restrictions, private claims, duplicate prevention, concurrent approval conflicts, rejection, handover, and related lost report closure. Temporary test users and data were removed.
+- Frontend publication validates portable ZIP paths and checks that the hosted HTML, JavaScript, and CSS are all accessible with correct MIME types, preventing a successful upload from hiding missing assets.
 - Not yet verified: browser interaction and responsive visual checks, and verification/reset email delivery to a real college inbox. The first real administrator must register, verify their email, and be added to the Cognito administrator group by an authorized operator.
 
 Cloud deployment now has a dedicated guide: [CLOUD_DEPLOYMENT.md](CLOUD_DEPLOYMENT.md). It covers the `@licet.ac.in` campus domain, Mumbai region, complete SAM/Amplify deployment, real Cognito sign-in, and live integration tests. AWS builds reject missing settings instead of falling back to demo sessions.

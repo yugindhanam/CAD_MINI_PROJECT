@@ -11,7 +11,7 @@ try {
   if ($LASTEXITCODE -ne 0) { throw 'Cloud frontend build failed.' }
   New-Item -ItemType Directory -Force .deployment | Out-Null
   $archive = Join-Path $projectRoot '.deployment/frontend.zip'
-  Compress-Archive -Path dist/* -DestinationPath $archive -Force
+  & (Join-Path $PSScriptRoot 'package-frontend.ps1') -ArchivePath $archive
   $raw = aws amplify create-deployment --app-id $outputs['AmplifyAppId'] --branch-name main --region $Region --output json
   if ($LASTEXITCODE -ne 0) { throw 'Unable to create Amplify deployment.' }
   $deployment = $raw | ConvertFrom-Json
@@ -20,7 +20,16 @@ try {
   catch { throw 'Amplify artifact upload failed. Create a new deployment and retry.' }
   aws amplify start-deployment --app-id $outputs['AmplifyAppId'] --branch-name main --job-id $deployment.jobId --region $Region --query 'jobSummary.{Job:jobId,Status:status}' --output json
   if ($LASTEXITCODE -ne 0) { throw 'Unable to start Amplify deployment.' }
-  Write-Host "Deployment started. Check its final status with:"
-  Write-Host "aws amplify get-job --app-id $($outputs['AmplifyAppId']) --branch-name main --job-id $($deployment.jobId) --region $Region --query job.summary.status --output text"
-  Write-Host "Frontend URL (available after deployment succeeds): $($outputs['FrontendUrl'])"
+  $status = 'PENDING'
+  $attempt = 0
+  while ($status -in @('PENDING','PROVISIONING','RUNNING') -and $attempt -lt 120) {
+    Start-Sleep -Seconds 5
+    $status = aws amplify get-job --app-id $outputs['AmplifyAppId'] --branch-name main --job-id $deployment.jobId --region $Region --query job.summary.status --output text
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to read Amplify deployment status.' }
+    $attempt++
+  }
+  if ($status -ne 'SUCCEED') { throw "Amplify deployment did not succeed: $status" }
+  node (Join-Path $PSScriptRoot 'verify-hosting.mjs') $outputs['FrontendUrl']
+  if ($LASTEXITCODE -ne 0) { throw 'The deployment completed but hosted asset verification failed.' }
+  Write-Host "Verified frontend: $($outputs['FrontendUrl'])"
 } finally { Pop-Location }
