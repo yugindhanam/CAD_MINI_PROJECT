@@ -1,4 +1,13 @@
 import { z } from "zod";
+export class DomainError extends Error {
+  constructor(
+    message: string,
+    public statusCode = 400,
+  ) {
+    super(message);
+    this.name = "DomainError";
+  }
+}
 export const categories = [
   "electronics",
   "ID cards",
@@ -48,14 +57,14 @@ export type Claim = {
 };
 export type State = { reports: Report[]; claims: Claim[] };
 export function requireAdmin(u: User) {
-  if (!u.admin) throw Error("Administrator access required");
+  if (!u.admin) throw new DomainError("Administrator access required", 403);
 }
 export function editReport(r: Report, u: User, input: unknown): Report {
   if (r.reporterId !== u.id || r.status !== "open")
-    throw Error("Only the owner can edit an open report");
+    throw new DomainError("Only the owner can edit an open report", 403);
   const parsed = reportInput.parse(input);
   if (parsed.type !== r.type)
-    throw Error("Report type cannot be changed after publication");
+    throw new DomainError("Report type cannot be changed after publication");
   return {
     ...r,
     ...parsed,
@@ -70,14 +79,20 @@ export function claimItem(
   existing?: Claim,
 ): Claim {
   if (r.type !== "found" || r.status !== "open" || r.reporterId === u.id)
-    throw Error("This item cannot be claimed");
+    throw new DomainError("This item cannot be claimed");
   if (
     existing &&
     ["pending", "approved", "completed"].includes(existing.status)
   )
-    throw Error("You already have an active claim");
-  if (evidence.trim().length < 15 || evidence.length > 3000)
-    throw Error("Provide 15–3000 characters of private identifying details");
+    throw new DomainError("You already have an active claim");
+  if (
+    typeof evidence !== "string" ||
+    evidence.trim().length < 15 ||
+    evidence.length > 3000
+  )
+    throw new DomainError(
+      "Provide 15–3000 characters of private identifying details",
+    );
   const now = new Date().toISOString();
   return {
     id: `${r.id}:${u.id}`,
@@ -99,10 +114,17 @@ export function decide(
   collection = "",
 ): { report: Report; claim: Claim } {
   requireAdmin(u);
+  if (
+    typeof reason !== "string" ||
+    reason.length > 1000 ||
+    typeof collection !== "string" ||
+    collection.length > 200
+  )
+    throw new DomainError("Invalid decision details");
   const now = new Date().toISOString();
   if (action === "complete") {
     if (c.status !== "approved" || r.status !== "claim approved")
-      throw Error("Only an approved claim can be handed over");
+      throw new DomainError("Only an approved claim can be handed over");
     return {
       report: {
         ...r,
@@ -119,12 +141,13 @@ export function decide(
     };
   }
   if (c.status !== "pending" || (action !== "reject" && r.status !== "open"))
-    throw Error("Claim or item is no longer available");
+    throw new DomainError("Claim or item is no longer available", 409);
   if (action === "approve" && collection.trim().length < 3)
-    throw Error("Specify a collection location");
+    throw new DomainError("Specify a collection location");
   if (action === "reject" && reason.trim().length < 3)
-    throw Error("Provide a rejection reason");
-  if (!["approve", "reject"].includes(action)) throw Error("Invalid action");
+    throw new DomainError("Provide a rejection reason");
+  if (!["approve", "reject"].includes(action))
+    throw new DomainError("Invalid action");
   return {
     report: {
       ...r,
@@ -143,9 +166,10 @@ export function decide(
   };
 }
 export function closeReport(r: Report, u: User): Report {
-  if (!u.admin && r.reporterId !== u.id) throw Error("Not authorized");
+  if (!u.admin && r.reporterId !== u.id)
+    throw new DomainError("Not authorized", 403);
   if ((r.type !== "lost" && !u.admin) || r.status !== "open")
-    throw Error(
+    throw new DomainError(
       "Only open lost reports or administrator-moderated open reports can be closed",
     );
   return {

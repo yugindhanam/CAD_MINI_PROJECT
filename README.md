@@ -4,11 +4,16 @@ A React + TypeScript college cloud computing project, with an explicitly labeled
 
 ## Project status
 
-The local demo and AWS application source are implemented. The report-to-return workflow includes private claims, administrator decisions, collection instructions, and a separate handover confirmation.
+The cloud application is deployed in AWS Mumbai (`ap-south-1`): **[Open Campus Find](https://main.d36jvrvas9xfi5.amplifyapp.com)**. Registration requires a verified `@licet.ac.in` email. The separate browser-local demo remains available for presentations.
 
-- Verified locally: TypeScript checks and production build, six automated tests, Lambda bundle loading, and an HTTP 200 response from the development server.
+- Verified: TypeScript checks, demo and cloud production builds, seven automated tests, SAM template validation/build, CloudFormation deployment, and successful Amplify publication.
 - The tests cover ownership restrictions, private claim access, administrator authorization, competing approval transactions using a mocked DynamoDB client, status transitions, and campus email domain validation.
-- Not yet verified: browser interaction and responsive visual checks, SAM CLI validation, deployment to AWS, and integration against live AWS services. No deployed application URL is available yet.
+- Verified against real AWS: Cognito SRP authentication, private S3 upload/view, ownership restrictions, private claims, duplicate prevention, concurrent approval conflicts, rejection, handover, and related lost report closure. Temporary test users and data were removed.
+- Not yet verified: browser interaction and responsive visual checks, and verification/reset email delivery to a real college inbox. The first real administrator must register, verify their email, and be added to the Cognito administrator group by an authorized operator.
+
+Cloud deployment now has a dedicated guide: [CLOUD_DEPLOYMENT.md](CLOUD_DEPLOYMENT.md). It covers the `@licet.ac.in` campus domain, Mumbai region, complete SAM/Amplify deployment, real Cognito sign-in, and live integration tests. AWS builds reject missing settings instead of falling back to demo sessions.
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the deployed environment and completed checks. The cloud database starts empty; the local demo seed data is not used by the hosted application.
 
 ## Repository structure
 
@@ -16,6 +21,7 @@ The local demo and AWS application source are implemented. The report-to-return 
 src/                   React pages, styles, demo seed data, and API adapter
 backend/               Lambda API, signup validation, shared workflow rules
 tests/                 Authorization, privacy, workflow, and signup tests
+scripts/               Cloud deployment, configuration, and live integration tests
 template.yaml          AWS SAM infrastructure
 amplify.yml            Amplify frontend build settings
 .env.example           Demo and AWS configuration without secrets
@@ -65,7 +71,15 @@ Amplify Hosting → React/Vite frontend
 
 ## AWS deployment
 
-Prerequisites: AWS account, configured AWS CLI credentials, SAM CLI, Node.js 24, npm, and permission to create IAM, Cognito, Lambda, API Gateway, DynamoDB and S3 resources. Resources incur AWS costs. No resources have been deployed by this repository setup.
+For the automated complete deployment, use:
+
+```powershell
+./scripts/deploy-cloud.ps1 -CampusDomain licet.ac.in -StackName campus-find -Region ap-south-1
+```
+
+See [CLOUD_DEPLOYMENT.md](CLOUD_DEPLOYMENT.md) for prerequisites and the live test command. The stack includes an Amplify app and hosting branch; the deployment script publishes a ZIP build without requiring a GitHub token. The manual SAM commands below remain available for backend-only work.
+
+Prerequisites: AWS account, configured AWS CLI credentials, SAM CLI, Node.js 24, npm, and permission to create IAM, Cognito, Lambda, API Gateway, DynamoDB, S3, and Amplify resources. Resources incur AWS costs. Reuse the existing `campus-find` stack to update the deployed environment.
 
 ```powershell
 npm ci
@@ -98,7 +112,7 @@ aws cognito-idp admin-add-user-to-group --user-pool-id <UserPoolId> --username <
 
 Sign out and back in after granting the group to refresh tokens. Users cannot self-assign groups. Do not grant Cognito administrative IAM permissions to the frontend or normal campus users.
 
-In AWS Amplify Hosting, connect this repository and select the branch. The included `amplify.yml` installs locked dependencies and builds `dist`. Configure the environment variables above, deploy, then update the SAM `FrontendOrigin` parameter to the actual Amplify origin and redeploy SAM. Add an Amplify SPA rewrite from `/<*>` to `/index.html` with status 200 if adding path-based routing later; the current UI uses in-app navigation. The frontend is delivered by Amplify; server resources are delivered by SAM. Deployment URLs must come from your actual AWS outputs.
+The SAM stack creates its own Amplify app and `main` branch, automatically allowing that origin in API and S3 CORS. Use `publish-frontend.ps1` to deploy frontend updates. Alternatively, a separate Git-connected Amplify app can use the included `amplify.yml`; configure its build environment variables and pass its exact origin as `FrontendOrigin` when deploying SAM. The current UI uses in-app navigation. Deployment URLs must come from actual AWS outputs.
 
 ## API and data design
 

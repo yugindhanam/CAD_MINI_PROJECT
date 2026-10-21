@@ -8,8 +8,29 @@ Parameters:
     AllowedPattern: "[a-zA-Z0-9.-]+"
   FrontendOrigin:
     Type: String
-    Default: http://localhost:5173
+    Default: http://127.0.0.1:5173
+    Description: Additional allowed origin for local AWS-mode development
 Resources:
+  HostingApp:
+    Type: AWS::Amplify::App
+    Properties:
+      Name: !Sub "${AWS::StackName}-web"
+      Platform: WEB
+      CustomHeaders: |
+        customHeaders:
+          - pattern: '**/*'
+            headers:
+              - key: X-Content-Type-Options
+                value: nosniff
+              - key: Referrer-Policy
+                value: strict-origin-when-cross-origin
+  HostingBranch:
+    Type: AWS::Amplify::Branch
+    Properties:
+      AppId: !GetAtt HostingApp.AppId
+      BranchName: main
+      Stage: PRODUCTION
+      EnableAutoBuild: false
   Records:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -50,7 +71,9 @@ Resources:
           - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
       CorsConfiguration:
         CorsRules:
-          - AllowedOrigins: [!Ref FrontendOrigin]
+          - AllowedOrigins:
+              - !Ref FrontendOrigin
+              - !Sub "https://main.${HostingApp.DefaultDomain}"
             AllowedMethods: [GET, POST]
             AllowedHeaders: ["*"]
             MaxAge: 300
@@ -75,7 +98,12 @@ Resources:
     Properties:
       UsernameAttributes: [email]
       AutoVerifiedAttributes: [email]
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - { Name: verified_email, Priority: 1 }
       UsernameConfiguration: { CaseSensitive: false }
+      UserAttributeUpdateSettings:
+        AttributesRequireVerificationBeforeUpdate: [email]
       Schema:
         - { Name: email, Required: true, Mutable: true }
       Policies:
@@ -112,14 +140,20 @@ Resources:
     Type: AWS::Serverless::HttpApi
     Properties:
       CorsConfiguration:
-        AllowOrigins: [!Ref FrontendOrigin]
+        AllowOrigins:
+          - !Ref FrontendOrigin
+          - !Sub "https://main.${HostingApp.DefaultDomain}"
         AllowMethods: [GET, POST, OPTIONS]
         AllowHeaders: [Authorization, Content-Type]
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 30
+        ThrottlingRateLimit: 15
       Auth:
         DefaultAuthorizer: CampusJwt
         Authorizers:
           CampusJwt:
             IdentitySource: "$request.header.Authorization"
+            AuthorizationScopes: [aws.cognito.signin.user.admin]
             JwtConfiguration:
               issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}"
               audience: [!Ref AppClient]
@@ -137,8 +171,25 @@ Resources:
           BUCKET_NAME: !Ref Photos
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref Records }
-        - S3CrudPolicy: { BucketName: !Ref Photos }
+        - Statement:
+            - Effect: Allow
+              Action: [s3:GetObject, s3:PutObject]
+              Resource: !Sub "${Photos.Arn}/*"
       Events:
+        Preflight:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: "/{proxy+}"
+            Method: OPTIONS
+            Auth: {Authorizer: NONE}
+        RootPreflight:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: "/"
+            Method: OPTIONS
+            Auth: {Authorizer: NONE}
         Root:
           {
             Type: HttpApi,
@@ -156,8 +207,13 @@ Resources:
         Target: es2022
         Minify: true
 Outputs:
+  FrontendUrl:
+    Value: !Sub "https://main.${HostingApp.DefaultDomain}"
+  AmplifyAppId: { Value: !GetAtt HostingApp.AppId }
+  CampusEmailDomain: { Value: !Ref CampusDomain }
   ApiUrl:
     Value: !Sub "https://${Api}.execute-api.${AWS::Region}.${AWS::URLSuffix}"
   UserPoolId: { Value: !Ref UserPool }
   UserPoolClientId: { Value: !Ref AppClient }
   PhotoBucket: { Value: !Ref Photos }
+  TableName: { Value: !Ref Records }

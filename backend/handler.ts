@@ -20,6 +20,7 @@ import {
   editReport,
   reportInput,
   requireAdmin,
+  DomainError,
   type Report,
   type Claim,
   type User,
@@ -35,7 +36,7 @@ async function get<T>(id: string) {
   const x = await db.send(
     new GetCommand({ TableName, Key: key(id), ConsistentRead: true }),
   );
-  if (!x.Item) throw Error("Record not found");
+  if (!x.Item) throw new DomainError("Record not found", 404);
   return x.Item.data as T;
 }
 const record = (data: Report | Claim, kind: string, owner: string) => ({
@@ -62,6 +63,10 @@ const update = (
 });
 export async function handler(event: any) {
   try {
+    const method = event.requestContext.http.method;
+    // These OPTIONS routes have no authorizer and carry no application data.
+    // API Gateway adds the configured CORS headers to this response.
+    if (method === "OPTIONS") return { statusCode: 204, body: "" };
     const jwt = event.requestContext?.authorizer?.jwt?.claims;
     if (!jwt?.sub) return response(401, { message: "Sign in required" });
     const u: User = {
@@ -75,13 +80,37 @@ export async function handler(event: any) {
             .map((group: string) => group.trim())
       ).includes("Administrators"),
     };
-    const method = event.requestContext.http.method;
     const path = event.rawPath;
-    const p = event.body ? JSON.parse(event.body) : {};
+    let p: any;
+    try {
+      p = event.body ? JSON.parse(event.body) : {};
+    } catch {
+      throw new DomainError("Request body must be valid JSON");
+    }
+    if (!p || typeof p !== "object" || Array.isArray(p))
+      throw new DomainError("Request body must be an object");
     if (method === "GET" && (path === "/reports" || path === "/claims")) {
       const kind = path === "/reports" ? "REPORT" : "CLAIM";
       const own = kind === "CLAIM" && !u.admin;
       const cursor = event.queryStringParameters?.cursor;
+      let startKey: Record<string, string> | undefined;
+      if (cursor) {
+        try {
+          if (cursor.length > 3000) throw Error();
+          const parsed = JSON.parse(
+            Buffer.from(cursor, "base64url").toString(),
+          );
+          if (
+            !parsed ||
+            typeof parsed !== "object" ||
+            !["pk", "sk"].every((k) => typeof parsed[k] === "string")
+          )
+            throw Error();
+          startKey = parsed;
+        } catch {
+          throw new DomainError("Invalid pagination cursor");
+        }
+      }
       const result = await db.send(
         new QueryCommand({
           TableName,
@@ -94,9 +123,7 @@ export async function handler(event: any) {
             : { ":p": kind },
           Limit: 24,
           ScanIndexForward: false,
-          ExclusiveStartKey: cursor
-            ? JSON.parse(Buffer.from(cursor, "base64url").toString())
-            : undefined,
+          ExclusiveStartKey: startKey,
         }),
       );
       const items = (result.Items || [])
@@ -118,7 +145,7 @@ export async function handler(event: any) {
         p.size < 1 ||
         p.size > 5242880
       )
-        throw Error("Invalid photo type or size");
+        throw new DomainError("Invalid photo type or size");
       const objectKey = `${u.id}/${crypto.randomUUID()}`;
       const signed = await createPresignedPost(s3, {
         Bucket,
@@ -136,7 +163,7 @@ export async function handler(event: any) {
       const r = await get<Report>(
         `REPORT#${decodeURIComponent(path.slice(8))}`,
       );
-      if (!r.photoKey) throw Error("Photo not found");
+      if (!r.photoKey) throw new DomainError("Photo not found", 404);
       return response(200, {
         url: await getSignedUrl(
           s3,
@@ -161,7 +188,7 @@ export async function handler(event: any) {
           typeof p.photoKey !== "string" ||
           !p.photoKey.startsWith(`${u.id}/`)
         )
-          throw Error("Invalid photo ownership");
+          throw new DomainError("Invalid photo ownership", 403);
         const h = await s3.send(
           new HeadObjectCommand({ Bucket, Key: p.photoKey }),
         );
@@ -172,7 +199,7 @@ export async function handler(event: any) {
             h.ContentType || "",
           )
         )
-          throw Error("Invalid uploaded photo");
+          throw new DomainError("Invalid uploaded photo");
         r.photoKey = p.photoKey;
       }
       await db.send(
@@ -182,7 +209,7 @@ export async function handler(event: any) {
           ConditionExpression: "attribute_not_exists(pk)",
         }),
       );
-      return response(201, { id: r.id });
+      return response(201, { report: r });
     }
     if (method === "POST" && ["/edit", "/close"].includes(path)) {
       const r = await get<Report>(`REPORT#${p.reportId}`);
@@ -192,7 +219,7 @@ export async function handler(event: any) {
           TransactItems: [update(next, "REPORT", r.reporterId, r.version)],
         }),
       );
-      return response(200, { ok: true });
+      return response(200, { report: next });
     }
     if (method === "POST" && path === "/claim") {
       const r = await get<Report>(`REPORT#${p.reportId}`);
@@ -231,7 +258,7 @@ export async function handler(event: any) {
           ],
         }),
       );
-      return response(201, { ok: true });
+      return response(201, { claim: c });
     }
     if (method === "POST" && path === "/decision") {
       requireAdmin(u);
@@ -246,7 +273,7 @@ export async function handler(event: any) {
           ],
         }),
       );
-      return response(200, { ok: true });
+      return response(200, next);
     }
     return response(404, { message: "Route not found" });
   } catch (e: any) {
@@ -265,8 +292,16 @@ export async function handler(event: any) {
           .map((i: any) => `${i.path.join(".")}: ${i.message}`)
           .join("; "),
       });
-    console.error("Request failed", e.name);
-    return response(400, { message: e.message || "Request failed" });
+    if (e instanceof DomainError)
+      return response(e.statusCode, { message: e.message });
+    console.error("Request failed", {
+      name: e.name,
+      requestId: event.requestContext?.requestId,
+    });
+    return response(500, {
+      message:
+        "The cloud service could not complete this request. Please retry.",
+    });
   }
 }
 function response(statusCode: number, body: unknown) {

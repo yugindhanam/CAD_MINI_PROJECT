@@ -31,7 +31,9 @@ test("API enforces private access, administrator authorization, and conditional 
     async (command: any) => {
       const p = command.input;
       if (command.constructor.name === "GetCommand")
-        return { Item: { data: structuredClone(records.get(p.Key.pk)) } };
+        return records.has(p.Key.pk)
+          ? { Item: { data: structuredClone(records.get(p.Key.pk)) } }
+          : {};
       if (command.constructor.name === "QueryCommand") {
         assert.equal(p.IndexName, "ByOwner");
         assert.equal(p.ExpressionAttributeValues[":p"], "alice");
@@ -84,8 +86,38 @@ test("API enforces private access, administrator authorization, and conditional 
         admin: true,
       }),
     );
-    assert.equal(denied.statusCode, 400);
+    assert.equal(denied.statusCode, 403);
     assert.equal(transactionCount, 0);
+    const falseGroup = event("alice", false, "/decision", {
+      claimId: a.id,
+      action: "approve",
+      collection: "Desk",
+    });
+    falseGroup.requestContext.authorizer.jwt.claims["cognito:groups"] =
+      "NonAdministrators";
+    assert.equal((await handler(falseGroup)).statusCode, 403);
+    assert.equal(
+      (
+        await handler({
+          ...event("alice", false, "/reports", {}),
+          body: "{invalid-json",
+        })
+      ).statusCode,
+      400,
+    );
+    assert.equal(
+      (
+        await handler({
+          ...event("alice", false, "/claims"),
+          queryStringParameters: { cursor: "invalid-cursor" },
+        })
+      ).statusCode,
+      400,
+    );
+    assert.equal(
+      (await handler(event("alice", false, "/photos/missing"))).statusCode,
+      404,
+    );
     const [first, second] = await Promise.all(
       [a, b].map((c) =>
         handler(
@@ -109,6 +141,15 @@ test("API enforces private access, administrator authorization, and conditional 
       requestContext: { http: { method: "GET" } },
     });
     assert.equal(anonymous.statusCode, 401);
+    assert.equal(
+      (
+        await handler({
+          rawPath: "/reports",
+          requestContext: { http: { method: "OPTIONS" } },
+        })
+      ).statusCode,
+      204,
+    );
   } finally {
     spy.mock.restore();
   }

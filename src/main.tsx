@@ -68,8 +68,24 @@ function App() {
     setBusy(true);
     setError("");
     try {
-      await api.mutate(user, action, p);
+      const result = await api.mutate(user, action, p);
       await refresh();
+      // Merge the transaction result so a briefly stale GSI read cannot undo the UI update.
+      if (result)
+        setData((current) => ({
+          reports: result.report
+            ? [
+                result.report,
+                ...current.reports.filter((r) => r.id !== result.report.id),
+              ]
+            : current.reports,
+          claims: result.claim
+            ? [
+                result.claim,
+                ...current.claims.filter((c) => c.id !== result.claim.id),
+              ]
+            : current.claims,
+        }));
       setNotice("Saved successfully.");
       return true;
     } catch (e) {
@@ -995,6 +1011,7 @@ function ReportForm({
 }
 function Login({ onLogin }: { onLogin: () => Promise<void> }) {
   const [mode, setMode] = useState("login"),
+    [email, setEmail] = useState(""),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [message, setMessage] = useState("");
@@ -1028,11 +1045,13 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
         <h2>
           {api.demo
             ? "Make yourself at home."
-            : mode === "register"
-              ? "Join your campus."
-              : mode === "verify"
-                ? "Check your inbox."
-                : "Welcome back."}
+            : mode === "reset" || mode === "reset-confirm"
+              ? "Recover your account."
+              : mode === "register"
+                ? "Join your campus."
+                : mode === "verify"
+                  ? "Check your inbox."
+                  : "Welcome back."}
         </h2>
         <p className="muted">
           Lost something? Found something? You’re in the right place.
@@ -1078,7 +1097,7 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
                 setBusy(true);
                 setError("");
                 try {
-                  const email = String(f.get("email"));
+                  const email = String(f.get("email")).trim().toLowerCase();
                   if (
                     email.split("@")[1]?.toLowerCase() !==
                     api.domain.toLowerCase()
@@ -1095,6 +1114,16 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
                     setMessage(
                       "Enter the verification code sent to your campus email.",
                     );
+                  } else if (mode === "reset") {
+                    setMode("reset-confirm");
+                    setMessage(
+                      "If an account exists, a password reset code has been sent to your verified email.",
+                    );
+                  } else if (mode === "reset-confirm") {
+                    setMode("login");
+                    setMessage(
+                      "Password updated. Sign in with your new password.",
+                    );
                   } else if (mode === "verify") {
                     setMode("login");
                     setMessage("Email verified. You can now sign in.");
@@ -1110,26 +1139,31 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
                 Campus email
                 <input
                   name="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
                   required
                   type="email"
                   placeholder={`you@${api.domain}`}
                 />
               </label>
-              {mode === "verify" ? (
+              {(mode === "verify" || mode === "reset-confirm") && (
                 <label>
                   Verification code
                   <input name="code" required autoComplete="one-time-code" />
                 </label>
-              ) : (
+              )}
+              {mode !== "verify" && mode !== "reset" && (
                 <label>
-                  Password
+                  {mode === "reset-confirm" ? "New password" : "Password"}
                   <input
                     name="password"
                     type="password"
                     required
                     minLength={12}
                     autoComplete={
-                      mode === "register" ? "new-password" : "current-password"
+                      mode === "register" || mode === "reset-confirm"
+                        ? "new-password"
+                        : "current-password"
                     }
                   />
                 </label>
@@ -1143,16 +1177,20 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
               <button className="primary wide" disabled={busy}>
                 {busy
                   ? "Please wait…"
-                  : mode === "register"
-                    ? "Create account"
-                    : mode === "verify"
-                      ? "Verify email"
-                      : "Sign in"}
+                  : mode === "reset"
+                    ? "Send reset code"
+                    : mode === "reset-confirm"
+                      ? "Save new password"
+                      : mode === "register"
+                        ? "Create account"
+                        : mode === "verify"
+                          ? "Verify email"
+                          : "Sign in"}
                 <ArrowRight size={17} />
               </button>
             </form>
             <div className="row-actions">
-              {["login", "register", "verify"]
+              {["login", "register", "verify", "reset"]
                 .filter((m) => m !== mode)
                 .map((m) => (
                   <button
@@ -1166,10 +1204,32 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
                       ? "Sign in"
                       : m === "register"
                         ? "Create account"
-                        : "Verify email"}
+                        : m === "reset"
+                          ? "Forgot password?"
+                          : "Verify email"}
                   </button>
                 ))}
             </div>
+            {mode === "verify" && (
+              <button
+                className="text-button"
+                disabled={busy || !email}
+                onClick={async () => {
+                  setBusy(true);
+                  setError("");
+                  try {
+                    await api.auth("resend", email, "", "");
+                    setMessage("A new verification code has been sent.");
+                  } catch (e) {
+                    setError((e as Error).message);
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                Resend verification code
+              </button>
+            )}
           </>
         )}
       </section>

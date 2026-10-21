@@ -6,6 +6,9 @@ import {
   signUp,
   confirmSignUp,
   signOut,
+  resetPassword,
+  confirmResetPassword,
+  resendSignUpCode,
 } from "aws-amplify/auth";
 import {
   claimItem,
@@ -17,14 +20,16 @@ import {
   type User,
 } from "./domain";
 import { seed } from "./seed";
-export const demo = import.meta.env.VITE_MODE !== "aws";
-export const domain = import.meta.env.VITE_CAMPUS_DOMAIN || "campus.edu";
+import { readConfig } from "./config";
+const config = readConfig(import.meta.env);
+export const demo = config.demo;
+export const domain = config.domain;
 if (!demo)
   Amplify.configure({
     Auth: {
       Cognito: {
-        userPoolId: import.meta.env.VITE_USER_POOL_ID,
-        userPoolClientId: import.meta.env.VITE_USER_POOL_CLIENT_ID,
+        userPoolId: config.userPoolId!,
+        userPoolClientId: config.userPoolClientId!,
       },
     },
   });
@@ -51,7 +56,16 @@ export async function auth(
   password: string,
   code: string,
 ) {
-  if (action === "register")
+  email = email.trim().toLowerCase();
+  if (action === "reset") await resetPassword({ username: email });
+  else if (action === "reset-confirm")
+    await confirmResetPassword({
+      username: email,
+      confirmationCode: code,
+      newPassword: password,
+    });
+  else if (action === "resend") await resendSignUpCode({ username: email });
+  else if (action === "register")
     await signUp({
       username: email,
       password,
@@ -59,7 +73,15 @@ export async function auth(
     });
   else if (action === "verify")
     await confirmSignUp({ username: email, confirmationCode: code });
-  else await signIn({ username: email, password });
+  else {
+    const result = await signIn({ username: email, password });
+    if (!result.isSignedIn)
+      throw Error(
+        result.nextStep.signInStep === "CONFIRM_SIGN_UP"
+          ? "Verify your campus email before signing in. Use Verify email below."
+          : "An additional account step is required. Try resetting your password.",
+      );
+  }
 }
 export async function logout() {
   if (demo) sessionStorage.removeItem("campus-session");
@@ -82,7 +104,9 @@ function read(): State {
 }
 async function request(path: string, method = "GET", body?: unknown) {
   const s = await fetchAuthSession();
-  const response = await fetch(`${import.meta.env.VITE_API_URL}${path}`, {
+  if (!s.tokens?.accessToken)
+    throw Error("Your session expired. Sign out and sign in again.");
+  const response = await fetch(`${config.apiUrl}${path}`, {
     method,
     headers: {
       Authorization: `Bearer ${s.tokens?.accessToken.toString()}`,
@@ -90,7 +114,9 @@ async function request(path: string, method = "GET", body?: unknown) {
     },
     body: body ? JSON.stringify(body) : undefined,
   });
-  const result = await response.json();
+  const result = await response.json().catch(() => ({
+    message: "The cloud API returned an unexpected response. Please retry.",
+  }));
   if (!response.ok) throw Error(result.message || "Request failed");
   return result;
 }
