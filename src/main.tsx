@@ -764,13 +764,7 @@ function ReportCard({
         <span className={`badge ${r.type}`}>
           {r.type === "lost" ? "Lost item" : "Found item"}
         </span>
-        {r.photo ? (
-          <img src={r.photo} alt={r.title} />
-        ) : (
-          <span className="item-glyph" aria-hidden="true">
-            {glyphs[r.category]}
-          </span>
-        )}
+        <Photo report={r} card />
         <span className="art-caption">{r.category}</span>
       </div>
       <div className="card-content">
@@ -862,22 +856,46 @@ function Modal({
     </div>
   );
 }
-function Photo({ report }: { report: Report }) {
+function Photo({ report, card = false }: { report: Report; card?: boolean }) {
   const [url, setUrl] = useState(report.photo || ""),
     [error, setError] = useState("");
   useEffect(() => {
+    let active = true;
+    setUrl(report.photo || "");
+    setError("");
     if (!api.demo && report.photoKey)
       api
         .photoUrl(report.id)
-        .then((r) => setUrl(r.url))
-        .catch(() =>
-          setError("Photo could not be loaded. Reopen the item to retry."),
-        );
-  }, [report.id]);
+        .then((r) => {
+          if (active) setUrl(r.url);
+        })
+        .catch(() => {
+          if (active)
+            setError("Photo could not be loaded. Reopen the item to retry.");
+        });
+    return () => {
+      active = false;
+    };
+  }, [report.id, report.photoKey, report.photo]);
   return (
     <>
-      {url && <img className="detail-photo" src={url} alt={report.title} />}
-      {error && <p role="alert">{error}</p>}
+      {url && (
+        <img
+          className={card ? undefined : "detail-photo"}
+          src={url}
+          alt={report.title}
+          onError={() => {
+            setUrl("");
+            setError("Photo could not be loaded. Reopen the item to retry.");
+          }}
+        />
+      )}
+      {card && !url && (
+        <span className="item-glyph" aria-hidden="true">
+          {glyphs[report.category]}
+        </span>
+      )}
+      {!card && error && <p role="alert">{error}</p>}
     </>
   );
 }
